@@ -1,13 +1,12 @@
-﻿using View.Sdk;
-using View.Sdk.Semantic;
+﻿
 
 namespace LiteGraphTest
 {
     using System.Collections.Specialized;
     using System.Net.Http.Headers;
     using LiteGraph.Sdk;
-    using Newtonsoft.Json;
-    
+    using View.Sdk.Serialization;
+    using View.Sdk.Semantic;
     /// <summary>
     /// Mock processing pipeline that simulates a file upload, type detection,
     /// and semantic cell extraction and uses LiteGraph for vector storage.
@@ -25,6 +24,8 @@ namespace LiteGraphTest
         private static Guid _GraphGuid;
         // The LiteGraph Sdk client that calls the remote LiteGraph.Server
         private static LiteGraphSdk _Sdk;
+        private static View.Sdk.Serialization.Serializer _Serializer = new View.Sdk.Serialization.Serializer();
+        
         #endregion
 
         #region Entrypoint
@@ -51,10 +52,10 @@ namespace LiteGraphTest
 
             // 2) Create a tenant and graph.
             Guid myTenantGuid = Guid.NewGuid();
-            var tenant = await _Sdk.CreateTenant(myTenantGuid, "Josh Test10");
+            var tenant = await _Sdk.CreateTenant(myTenantGuid, "Josh Test11");
 
             Guid myGraphGuid = Guid.NewGuid();
-            var graph = await _Sdk.CreateGraph(tenant.GUID, myGraphGuid, "Josh's Test Graph10");
+            var graph = await _Sdk.CreateGraph(tenant.GUID, myGraphGuid, "Josh's Test Graph11");
 
             // Store guids for later:
             _TenantGuid = tenant.GUID;
@@ -288,7 +289,9 @@ namespace LiteGraphTest
                 // Parse the JSON response into the TypeDetectionResult
                 // ToDo: Figure out where to grab the serializer from
                 string json = await response.Content.ReadAsStringAsync();
-                var result = JsonConvert.DeserializeObject<TypeDetectionResult>(json);
+                // var result = JsonConvert.DeserializeObject<TypeDetectionResult>(json);
+                var result = _Serializer.DeserializeJson<TypeDetectionResult>(json);
+
                 return result;
             }
             catch
@@ -330,7 +333,8 @@ namespace LiteGraphTest
 
                 // Serialize to JSON
                 // Todo: Figure out where to get the serializer from
-                string reqJson = Newtonsoft.Json.JsonConvert.SerializeObject(requestBody);
+                // string reqJson = Newtonsoft.Json.JsonConvert.SerializeObject(requestBody);
+                string reqJson = _Serializer.SerializeJson(requestBody);
                 using var content = new StringContent(reqJson);
                 // By default, StringContent sets Content-Type to "text/plain; charset=utf-8".
                 // Had to override it to be "application/json" (with no explicit charset).
@@ -343,7 +347,8 @@ namespace LiteGraphTest
                 // Deserialize the response JSON
                 // ToDo: Figure out where to get the serializer from
                 string json = await response.Content.ReadAsStringAsync();
-                var result = Newtonsoft.Json.JsonConvert.DeserializeObject<SemanticCellResponse>(json);
+                // var result = Newtonsoft.Json.JsonConvert.DeserializeObject<SemanticCellResponse>(json);
+                var result = _Serializer.DeserializeJson<SemanticCellResponse>(json);
                 return result;
             }
             catch
