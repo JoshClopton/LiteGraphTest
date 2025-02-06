@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="LiteGraph" Version="3.1.1" />
+      <PackageReference Include="LiteGraph.Sdk" Version="3.1.1" />
+      <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+      <PackageReference Include="RestWrapper" Version="3.1.4" />
+      <PackageReference Include="SerializationHelper" Version="2.0.2" />
+      <PackageReference Include="SyslogLogging" Version="2.0.8" />
+      <PackageReference Include="View.Sdk" Version="1.2.37" />
+      <PackageReference Include="Watson" Version="6.3.5" />
+      <PackageReference Include="Watson.Core" Version="6.3.5" />
+    </ItemGroup>
+
+</Project>
