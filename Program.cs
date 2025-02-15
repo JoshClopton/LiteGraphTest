@@ -1,116 +1,159 @@
-﻿
-
-
-using GetSomeInput;
-
-namespace LiteGraphTest
+﻿namespace LiteGraphTest
 {
-    using System.Collections.Specialized;
-    using System.Net.Http.Headers;
+    using ConsoleTables;
+    using GetSomeInput;
     using LiteGraph.Sdk;
-    using View.Sdk.Serialization;
-    using View.Sdk.Semantic;
+    using System;
+    using System.Collections.Generic;
+    using System.Collections.Specialized;
+    using System.IO;
+    using System.Linq;
+    using System.Threading.Tasks;
     using View.Sdk;
-
+    using View.Sdk.Embeddings;
+    using View.Sdk.Processor;
+    using View.Sdk.Semantic;
+    
     /// <summary>
-    /// Mock processing pipeline that simulates a file upload, type detection,
-    /// and semantic cell extraction and uses LiteGraph for vector storage.
+    /// LiteGraph Test Program. 
     /// </summary>
     public class Program
     {
         #region Public-Members
-
+        
         #endregion
         
         #region Private-Members
         
-        // Fields for creating tenant & graph
-        private static Guid _TenantGuid = Guid.Empty;
-        private static string _AccessKey = "";
-        private static string _Endpoint = "http://192.168.197.128:8000/v1.0/tenants/00000000-0000-0000-0000-000000000000" +
-                                          "/processing/semanticcell";
-        private static Guid _GraphGuid = Guid.Parse("00000000-0000-0000-0000-000000000000");
-        private static bool _EnableLogging = true;
-        
-        // The LiteGraph Sdk client that calls the remote LiteGraph.Server
-        private static LiteGraphSdk _Sdk;
+        private static readonly string _LitegraphEndpoint = "http://localhost:8701";
+        private static readonly string _LitegraphBearerToken = "litegraphadmin";
+        private static Guid _Graph = Guid.Parse("00000000-0000-0000-0000-000000000000");
+        private static Guid _Tenant = Guid.Parse("00000000-0000-0000-0000-000000000000");
+        private static string _AccessKey = "default";
+        private static string _ViewEndpoint = "http://localhost:8000/";
+        private static readonly bool _EnableLogging = true;
         private static View.Sdk.Serialization.Serializer _Serializer = new View.Sdk.Serialization.Serializer();
-        private static View.Sdk.Semantic.ViewSemanticCellSdk _ViewSemanticCellSdk;
+        private static VectorSearchTypeEnum _SearchType = VectorSearchTypeEnum.CosineSimilarity;
+        
+        private static int _BatchSize = 2;
+        private static int _MaxParallelTasks = 4;
+        private static int _MaxRetries = 3;
+        private static int _MaxFailures = 3;
+
+        private static LiteGraphSdk _LiteGraphSdk;
+        private static ViewSemanticCellSdk _ViewSemanticCellSdk;
+        private static ViewEmbeddingsServerSdk _ViewEmbeddingsSdk;
+        
+        private static bool _RunForever = true;
         
         #endregion
 
-        #region Entrypoint
+        #region Constructors-Factories
+        
+        #endregion
+        
+        #region Entry-Point
 
         /// <summary>
-        /// Main.
+        /// Main
         /// </summary>
-        /// <param name="args">Arguments.</param>
         public static async Task Main(string[] args)
         {
-            // EventWaitHandle waitHandle = new EventWaitHandle(false, EventResetMode.AutoReset);
-            // bool waitHandleSignal = false;
-            // do
-            // {
-            //     waitHandleSignal = waitHandle.WaitOne(1000);
-            // }
-            // while (!waitHandleSignal);
+            _ViewEndpoint = Inputty.GetString("View Endpoint URL:", _ViewEndpoint, false);
+            _AccessKey = Inputty.GetString("Access key:", _AccessKey, false);
             
-            // 1) Initialize the LiteGraphSdk, pointing to my LiteGraph.Server
-            string endpointUrl = "http://localhost:8701";
-            string bearerToken = "litegraphadmin";
-            _Sdk = new LiteGraphSdk(endpointUrl, bearerToken);
+            _LiteGraphSdk = new LiteGraphSdk(_LitegraphEndpoint, _LitegraphBearerToken);
+            _ViewSemanticCellSdk = new ViewSemanticCellSdk(_Tenant, _AccessKey, _ViewEndpoint);
+            _ViewEmbeddingsSdk = new ViewEmbeddingsServerSdk(_Tenant, _ViewEndpoint, _AccessKey);
             
-            _ViewSemanticCellSdk = new ViewSemanticCellSdk(_TenantGuid, _AccessKey, _Endpoint
-            );
+            if (_EnableLogging)
+            {
+                _ViewSemanticCellSdk.Logger += (sev, msg) =>
+                {
+                    if (!string.IsNullOrEmpty(msg))
+                        Console.WriteLine($"{sev} {msg}");
+                };
+                
+                _ViewEmbeddingsSdk.Logger += (sev, msg) =>
+                {
+                    if (!string.IsNullOrEmpty(msg))
+                        Console.WriteLine($"{sev} {msg}");
+                };
+                
+                _LiteGraphSdk.Logger += (sev, msg) =>
+                {
+                    if (!string.IsNullOrEmpty(msg))
+                        Console.WriteLine($"{sev} {msg}");
+                };
+            }
             
-            if (_EnableLogging) _ViewSemanticCellSdk.Logger
-                += EmitLogMessage;
-            
+            while (_RunForever)
+            {
+                string userInput = Inputty.GetString("Command [?/help]:", null, false);
 
-            // // 2) Create a tenant and graph.
-            // Guid myTenantGuid = Guid.NewGuid();
-            // var tenant = await _Sdk.CreateTenant(myTenantGuid, "Josh Test11");
+                switch (userInput)
+                {
+                    case "?":
+                        Menu();
+                        break;
+                    case "q":
+                        _RunForever = false;
+                        break;
+                    case "cls":
+                        Console.Clear();
+                        break;
 
-            // Guid myGraphGuid = Guid.NewGuid();
-            // var graph = await _Sdk.CreateGraph(tenant.GUID, myGraphGuid, "Josh's Test Graph11");
-            //
-            // // Store guids for later:
-            // _TenantGuid = tenant.GUID;
-            // _GraphGuid = graph.GUID;
+                    case "conn":
+                        ValidateConnectivity();
+                        break;
+                    
+                    case "ingest":
+                        await IngestFile();
+                        break;
+                    
+                    case "vsearch":
+                        await VectorSearch();
+                        break;
+                    
+                    case "search-type":
+                        SetSearchType();
+                        break;
+                }
 
-            // 3) Get a file path from console
-            Console.Write("Enter file path: ");
-            string filePath = Console.ReadLine();
+                Console.WriteLine("");
+            }
+        }
+
+        #endregion
+
+        #region Public-Methods
+        
+        #endregion
+
+        #region Private-Methods
+
+        /// <summary>
+        /// Ingests a file from disk, runs it through semantic processing, creates nodes/edges, and generates embeddings.
+        /// </summary>
+        private static async Task IngestFile()
+        {
+            string filePath = Inputty.GetString("Enter the file path:", null, false);
             if (!File.Exists(filePath))
             {
                 Console.WriteLine("File not found!");
                 return;
             }
-
-            // 4) Read file as bytes for base64 encoding
+            
             byte[] fileBytes = File.ReadAllBytes(filePath);
             Console.WriteLine($"Loaded file {filePath}, size {fileBytes.Length} bytes");
-
-            // 5) Detect the file type
-            TypeResult typeInfo = await DetectFileType(fileBytes);
+            
+            var typeInfo = await DetectFileType(fileBytes);
             if (typeInfo == null)
             {
                 Console.WriteLine("Failed to detect file type.");
                 return;
             }
             Console.WriteLine($"Type Detection: {typeInfo.MimeType}, {typeInfo.Extension}, {typeInfo.Type}");
-            
-            await TestConnectivity();
-
-            // 6) Call semantic cell service
-            // var semanticCells = await GetSemanticCells(typeInfo.Type, fileBytes);
-            // if (semanticCells == null)
-            // {
-            //     Console.WriteLine("Failed to get semantic cells.");
-            //     return;
-            // }
-            // Console.WriteLine("Semantic cell extraction succeeded.");
-            
             
             var mdRule = new MetadataRule
             {
@@ -120,335 +163,504 @@ namespace LiteGraphTest
                 MaxChunkContentLength = 512,
                 ShiftSize = 512
             };
-            
+
             var docTypeEnum = typeInfo.Type;
             
-            View.Sdk.Semantic.SemanticCellResponse scr = await _ViewSemanticCellSdk.Process(docTypeEnum, mdRule, fileBytes);
-
-            // 7) Store the entire semantic cell response as a single node in LiteGraph
-            var documentNode = new LiteGraph.Sdk.Node
+            View.Sdk.Semantic.SemanticCellResponse scr = 
+                await _ViewSemanticCellSdk.Process(docTypeEnum, mdRule, fileBytes);
+            
+            var docNode = new LiteGraph.Sdk.Node
             {
                 GUID = Guid.NewGuid(),
-                TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000000"),
-                GraphGUID = _GraphGuid,
+                TenantGUID = _Tenant,
+                GraphGUID = _Graph,
                 Name = Path.GetFileName(filePath),
                 Labels = new List<string> { "document" },
-                // ToDo: Is NameValueCollection the right type for tags?
                 Tags = new NameValueCollection
                 {
                     { "DocumentType", typeInfo.Type.ToString() },
                     { "Extension",    typeInfo.Extension },
-                    {"NodeType", "Document" },
-                    {"MimeType", typeInfo.MimeType },
-                    {"FileName", Path.GetFileName(filePath) },
-                    {"FilePath", filePath},
-                    {"ContentLength", fileBytes.Length.ToString() }
+                    { "NodeType",     "Document" },
+                    { "MimeType",     typeInfo.MimeType },
+                    { "FileName",     Path.GetFileName(filePath) },
+                    { "FilePath",     filePath},
+                    { "ContentLength", fileBytes.Length.ToString() }
                 },
-                Data = scr.SemanticCells
+                Data = scr.SemanticCells 
             };
 
-            var createdDocNode = await _Sdk.CreateNode(Guid.Parse("00000000-0000-0000-0000-000000000000"), _GraphGuid, documentNode);
+            var createdDocNode = await _LiteGraphSdk.CreateNode(_Tenant, _Graph, docNode);
             if (createdDocNode == null)
             {
                 Console.WriteLine("Failed to create document node in LiteGraph");
                 return;
             }
-
             Console.WriteLine($"Document node created in LiteGraph with GUID {createdDocNode.GUID}");
-            // If SemanticCells is not null and has atleast 1 item, create nodes for each cell and chunk
-            if (scr.SemanticCells != null && scr.SemanticCells.Any())
+            
+            if (scr.SemanticCells == null || !scr.SemanticCells.Any())
             {
-                foreach (var cell in scr.SemanticCells)
+                Console.WriteLine("No semantic cells found in the response.");
+                return;
+            }
+
+            var cellNodes = scr.SemanticCells.Select((cell, index) => new LiteGraph.Sdk.Node
+            {
+                GUID = Guid.NewGuid(),
+                TenantGUID = _Tenant,
+                GraphGUID = _Graph,
+                Name = $"Cell {cell.GUID}",
+                Labels = new List<string> { "semantic-cell" },
+                Tags = new NameValueCollection
                 {
-                    // A) Create a node for this cell
-                    var cellNode = new LiteGraph.Sdk.Node
+                    { "CellType", cell.CellType.ToString() },
+                    { "NodeType", "SemanticCell" },
+                    { "MD5Hash", cell.MD5Hash },
+                    { "SHA1Hash", cell.SHA1Hash },
+                    { "SHA256Hash", cell.SHA256Hash },
+                    { "Position", cell.Position.ToString() },
+                    { "Length", cell.Length.ToString() }
+                }
+            }).ToList();
+            
+            var createdCellNodes = await _LiteGraphSdk.CreateNodes(_Tenant, _Graph, cellNodes);
+            if (createdCellNodes == null || !createdCellNodes.Any())
+            {
+                Console.WriteLine("Failed to create any cell nodes in LiteGraph");
+                return;
+            }
+            Console.WriteLine($"Created {createdCellNodes.Count} cell nodes in LiteGraph.");
+            
+            var docToCellEdges = createdCellNodes.Zip(scr.SemanticCells, (cellNode, cell) => new Edge
+            {
+                GUID = Guid.NewGuid(),
+                TenantGUID = _Tenant,
+                GraphGUID = _Graph,
+                From = createdDocNode.GUID,
+                To = cellNode.GUID,
+                Name = $"Doc->Cell {cell.GUID}",
+                Labels = new List<string> { "edge", "document-cell" },
+                Tags = new NameValueCollection
+                {
+                    { "Relationship", "ContainsCell" },
+                    { "EdgeType", "DocumentToCell" }
+                }
+            }).ToList();
+
+            var createdDocToCellEdges = await _LiteGraphSdk.CreateEdges(_Tenant, _Graph, docToCellEdges);
+            if (createdDocToCellEdges == null || createdDocToCellEdges.Count == 0)
+                Console.WriteLine("Failed to create doc->cell edges in bulk");
+            else
+                Console.WriteLine($"Created {createdDocToCellEdges.Count} doc->cell edges in bulk");
+            
+            var allChunkNodes = new List<LiteGraph.Sdk.Node>();
+            var cellToChunkIndices = new Dictionary<int, List<int>>();
+
+            for (int i = 0; i < scr.SemanticCells.Count; i++)
+            {
+                var cell = scr.SemanticCells[i];
+                if (cell.Chunks == null) continue;
+
+                cellToChunkIndices[i] = new List<int>();
+
+                foreach (var chunk in cell.Chunks)
+                {
+                    var chunkTags = new NameValueCollection();
+
+                    if (!string.IsNullOrEmpty(chunk.MD5Hash)) chunkTags.Add("MD5Hash", chunk.MD5Hash);
+                    if (!string.IsNullOrEmpty(chunk.SHA1Hash)) chunkTags.Add("SHA1Hash", chunk.SHA1Hash);
+                    if (!string.IsNullOrEmpty(chunk.SHA256Hash)) chunkTags.Add("SHA256Hash", chunk.SHA256Hash);
+
+                    chunkTags.Add("Position", chunk.Position.ToString());
+                    chunkTags.Add("Start", chunk.Start.ToString());
+                    chunkTags.Add("End", chunk.End.ToString());
+                    chunkTags.Add("Length", chunk.Length.ToString());
+                    if (!string.IsNullOrEmpty(chunk.Content)) chunkTags.Add("Content", chunk.Content);
+                    chunkTags.Add("NodeType", "SemanticChunk");
+
+                    var chunkNode = new LiteGraph.Sdk.Node
                     {
                         GUID = Guid.NewGuid(),
-                        TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000000"),
-                        GraphGUID = _GraphGuid,
-                        Name = $"Cell {cell.GUID}",
-                        Labels = new List<string> { "semantic-cell" },
-                        // Data = cell,
-                        Tags = new NameValueCollection
-                        {
-                            { "CellType", cell.CellType.ToString() },
-                            {"NodeType", "SemanticCell" },
-                            { "MD5Hash", cell.MD5Hash },
-                            { "SHA1Hash", cell.SHA1Hash },
-                            { "SHA256Hash", cell.SHA256Hash },
-                            { "Position", cell.Position.ToString() },
-                            { "Length", cell.Length.ToString() }
-                        }
+                        TenantGUID = _Tenant,
+                        GraphGUID = _Graph,
+                        Name = $"Chunk {chunk.GUID}",
+                        Labels = new List<string> { "semantic-chunk" },
+                        Data = chunk,
+                        Tags = chunkTags
                     };
-
-                    var createdCellNode = await _Sdk.CreateNode(Guid.Parse("00000000-0000-0000-0000-000000000000"), _GraphGuid, cellNode);
-                    if (createdCellNode == null)
-                    {
-                        Console.WriteLine($"Failed to create cell node for cell {cell.GUID}");
-                        continue;
-                    }
-
-                    Console.WriteLine($"Cell node created with GUID {createdCellNode.GUID}");
-
-                    // B) Create an edge from the Document node --> Cell node
-                    var cellEdge = new Edge
-                    {
-                        GUID = Guid.NewGuid(),
-                        TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000000"),
-                        GraphGUID = _GraphGuid,
-                        From = createdDocNode.GUID,
-                        To = createdCellNode.GUID,
-                        Name = $"Doc->Cell {cell.GUID}",
-                        Labels = new List<string> { "edge", "document-cell" },
-                        Tags = new NameValueCollection
-                        {
-                            { "Relationship", "ContainsCell" },
-                            { "EdgeType", "DocumentToCell" },
-                        }
-                    };
-
-                    var createdCellEdge = await _Sdk.CreateEdge(Guid.Parse("00000000-0000-0000-0000-000000000000"), _GraphGuid, cellEdge);
-                    if (createdCellEdge != null)
-                    {
-                        Console.WriteLine($"Edge created from doc {createdDocNode.GUID} to cell {createdCellNode.GUID}");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Failed to create edge for cell {cell.GUID}");
-                    }
-
-                    // C) For each chunk in this cell, create a node, then link it to the cell node
-                    if (cell.Chunks != null && cell.Chunks.Any())
-                    {
-                        foreach (var chunk in cell.Chunks)
-                        {
-                            // Create chunk node
-                            var chunkNode = new LiteGraph.Sdk.Node
-                            {
-                                GUID = Guid.NewGuid(),
-                                TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000000"),
-                                GraphGUID = _GraphGuid,
-                                Name = $"Chunk {chunk.GUID}",
-                                Labels = new List<string> { "semantic-chunk" },
-                                Data = chunk,
-                                Tags = new NameValueCollection
-                                {
-                                    { "MD5Hash", chunk.MD5Hash },
-                                    { "SHA1Hash", chunk.SHA1Hash },
-                                    { "SHA256Hash", chunk.SHA256Hash },
-                                    { "Position", chunk.Position.ToString() },
-                                    { "Start", chunk.Start.ToString() },
-                                    { "End", chunk.End.ToString() },
-                                    { "Length", chunk.Length.ToString() },
-                                    { "Content", chunk.Content },
-                                    {"NodeType", "SemanticChunk" }
-                                }
-                            };
-
-                            var createdChunkNode = await _Sdk.CreateNode(Guid.Parse("00000000-0000-0000-0000-000000000000"), _GraphGuid, chunkNode);
-                            if (createdChunkNode == null)
-                            {
-                                Console.WriteLine($"Failed to create chunk node for chunk {chunk.GUID}");
-                                continue;
-                            }
-
-                            Console.WriteLine($"Chunk node created with GUID {createdChunkNode.GUID}");
-
-                            // Create edge from the cell node -> chunk node
-                            var chunkEdge = new Edge
-                            {
-                                GUID = Guid.NewGuid(),
-                                TenantGUID = Guid.Parse("00000000-0000-0000-0000-000000000000"),
-                                GraphGUID = _GraphGuid,
-                                From = createdCellNode.GUID,
-                                To = createdChunkNode.GUID,
-                                Name = $"Cell->Chunk {chunk.GUID}",
-                                Labels = new List<string> { "edge", "cell-chunk" },
-                                Tags = new NameValueCollection
-                                {
-                                    { "Relationship", "ContainsChunk" }, 
-                                    { "EdgeType", "CellToChunk" },
-                                    { "Position", chunk.Position.ToString() },
-                                    { "Start", chunk.Start.ToString() },
-                                    { "End", chunk.End.ToString() },
-                                    { "Length", chunk.Length.ToString() },
-                                    { "Content", chunk.Content }
-                                }
-                            };
-
-                            var createdChunkEdge = await _Sdk.CreateEdge(Guid.Parse("00000000-0000-0000-0000-000000000000"), _GraphGuid, chunkEdge);
-                            if (createdChunkEdge != null)
-                            {
-                                Console.WriteLine($"Edge created from cell {createdCellNode.GUID} to chunk {createdChunkNode.GUID}");
-                            }
-                            else
-                            {
-                                Console.WriteLine($"Failed to create edge for chunk {chunk.GUID}");
-                            }
-                        }
-                    }
+                    cellToChunkIndices[i].Add(allChunkNodes.Count);
+                    allChunkNodes.Add(chunkNode);
                 }
             }
-        }
-        
-        #endregion
 
-        /// <summary>
-        /// Call to type detection API.
-        /// </summary>
+            var createdChunkNodes = await _LiteGraphSdk.CreateNodes(_Tenant, _Graph, allChunkNodes);
+            if (createdChunkNodes == null || !createdChunkNodes.Any())
+            {
+                Console.WriteLine("Failed to create any chunk nodes in LiteGraph");
+            }
+            else
+            {
+                Console.WriteLine($"Created {createdChunkNodes.Count} chunk nodes in LiteGraph.");
+                
+                var cellToChunkEdges = new List<Edge>();
+
+                for (int i = 0; i < scr.SemanticCells.Count; i++)
+                {
+                    var cell = scr.SemanticCells[i];
+                    if (cell.Chunks == null || !cell.Chunks.Any()) continue;
+                    
+                    var cellNode = createdCellNodes[i];
+
+                    for (int chunkIdx = 0; chunkIdx < cell.Chunks.Count; chunkIdx++)
+                    {
+                        var chunk = cell.Chunks[chunkIdx];
+                        var indexInAllChunkNodes = cellToChunkIndices[i][chunkIdx];
+                        var createdChunkNode = createdChunkNodes[indexInAllChunkNodes];
+
+                        var edge = new Edge
+                        {
+                            GUID = Guid.NewGuid(),
+                            TenantGUID = _Tenant,
+                            GraphGUID = _Graph,
+                            From = cellNode.GUID,
+                            To = createdChunkNode.GUID,
+                            Name = $"Cell->Chunk {chunk.GUID}",
+                            Labels = new List<string> { "edge", "cell-chunk" },
+                            Tags = new NameValueCollection
+                            {
+                                { "Relationship", "ContainsChunk" },
+                                { "EdgeType", "CellToChunk" },
+                                { "Position", chunk.Position.ToString() },
+                                { "Start", chunk.Start.ToString() },
+                                { "End", chunk.End.ToString() },
+                                { "Length", chunk.Length.ToString() },
+                            },
+                            Data = chunk.Content
+                        };
+
+                        cellToChunkEdges.Add(edge);
+                    }
+                }
+
+                if (cellToChunkEdges.Count > 0)
+                {
+                    var createdCellToChunkEdges = 
+                        await _LiteGraphSdk.CreateEdges(_Tenant, _Graph, cellToChunkEdges);
+
+                    if (createdCellToChunkEdges == null || createdCellToChunkEdges.Count == 0)
+                        Console.WriteLine("Failed to create cell->chunk edges in bulk");
+                    else
+                        Console.WriteLine($"Successfully created {createdCellToChunkEdges.Count} cell->chunk edges in bulk");
+                }
+                else
+                {
+                    Console.WriteLine("No cell->chunk edges to create (no chunks).");
+                }
+            }
+            
+            var chunkContents = new List<string>();
+            var cellToChunkMappings = new List<(int cellIndex, int chunkIndex)>();
+
+            for (int i = 0; i < scr.SemanticCells.Count; i++)
+            {
+                var cell = scr.SemanticCells[i];
+                if (cell.Chunks == null || !cell.Chunks.Any()) continue;
+
+                for (int j = 0; j < cell.Chunks.Count; j++)
+                {
+                    var chunk = cell.Chunks[j];
+                    chunkContents.Add(chunk.Content);
+                    cellToChunkMappings.Add((i, j));
+                }
+            }
+            
+            EmbeddingsGeneratorEnum generator = GetGeneratorType();
+            string url = GetBaseUrl(generator);
+            string apiKey = GetApiKey();
+            string model = GetModel(generator);
+
+            var req = new EmbeddingsRequest
+            {
+                EmbeddingsRule = new EmbeddingsRule
+                {
+                    EmbeddingsGenerator = generator,
+                    EmbeddingsGeneratorUrl = url,
+                    EmbeddingsGeneratorApiKey = apiKey,
+                    BatchSize = _BatchSize,
+                    MaxGeneratorTasks = _MaxParallelTasks,
+                    MaxRetries = _MaxRetries,
+                    MaxFailures = _MaxFailures
+                },
+                Model = model,
+                Contents = chunkContents
+            };
+
+            var embeddingsResult = await _ViewEmbeddingsSdk.GenerateEmbeddings(req);
+            if (!embeddingsResult.Success)
+            {
+                Console.WriteLine($"Embeddings generation failed: {embeddingsResult.StatusCode}");
+                if (embeddingsResult.Error != null)
+                {
+                    Console.WriteLine($"Error: {embeddingsResult.Error.Message}");
+                }
+                return;
+            }
+
+            if (embeddingsResult.ContentEmbeddings != null && embeddingsResult.ContentEmbeddings.Any())
+            {
+                await Task.WhenAll(embeddingsResult.ContentEmbeddings
+                    .Zip(cellToChunkMappings, (ce, mapping) => new { ContentEmbedding = ce, Mapping = mapping })
+                    .Select(async item =>
+                    {
+                        var (cellIndex, chunkIndex) = item.Mapping;
+                        var chunk = scr.SemanticCells[cellIndex].Chunks[chunkIndex];
+                        chunk.Embeddings = item.ContentEmbedding.Embeddings;
+
+                        var indexInAllChunkNodes = cellToChunkIndices[cellIndex][chunkIndex];
+                        var chunkNode = createdChunkNodes[indexInAllChunkNodes];
+
+                        chunkNode.Data = null;
+                        chunkNode.Vectors = new List<VectorMetadata>
+                        {
+                            new VectorMetadata
+                            {
+                                TenantGUID = _Tenant,
+                                GraphGUID = _Graph,
+                                NodeGUID = chunkNode.GUID,
+                                Model = "all-MiniLM-L6-v2",
+                                Dimensionality = item.ContentEmbedding.Embeddings?.Count ?? 0,
+                                Vectors = item.ContentEmbedding.Embeddings,
+                                Content = chunk.Content
+                            }
+                        };
+
+                        return await _LiteGraphSdk.UpdateNode(_Tenant, _Graph, chunkNode);
+                    }));
+                
+                Console.WriteLine("Updated all chunk nodes with embeddings");
+            }
+            
+            Console.WriteLine($"Processed embeddings for {embeddingsResult?.ContentEmbeddings?.Count} chunks");
+        }
+
         private static async Task<TypeResult> DetectFileType(byte[] fileBytes)
         {
-            try
-            {
-                // Call the type detection API on my Ubuntu
-                var url = "http://192.168.197.128:8000/v1.0/tenants/00000000-0000-0000-0000-000000000000/processing/typedetection";
-
-                // Create an HttpClient (ToDo: Joel might have his own service here)
-                using var client = new HttpClient();
-        
-                // Add the "Authorization: Bearer default" header
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "default");
-        
-                // Put the raw file bytes into the request body
-                using var content = new ByteArrayContent(fileBytes);
-                // Set the content type:
-                content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        
-                // Send the POST
-                var response = await client.PostAsync(url, content);
-                if (!response.IsSuccessStatusCode)
-                    return null;
-
-                // Parse the JSON response into the TypeDetectionResult
-                // ToDo: Figure out where to grab the serializer from
-                string json = await response.Content.ReadAsStringAsync();
-                // var result = JsonConvert.DeserializeObject<TypeDetectionResult>(json);
-                var result = _Serializer.DeserializeJson<TypeResult>(json);
-
-                return result;
-            }
-            catch
-            {
-                return null;
-            }
+            var td = new ViewTypeDetectorSdk(_Tenant, _AccessKey, _ViewEndpoint);
+            return await td.Process(fileBytes);
         }
 
-        /// <summary>
-        /// Call to semantic cell extraction API.
-        /// base64-encode the file for the "Data" field in JSON.
-        /// </summary>
-        private static async Task<SemanticCellResponse> GetSemanticCells(string docType, byte[] fileBytes)
-        {
-            try
-            {
-                // Point to api on Ubuntu
-                string url = "http://192.168.197.128:8000/v1.0/tenants/00000000-0000-0000-0000-000000000000/processing/semanticcell";
-                // Create HttpClient
-                using var client = new HttpClient();
-        
-                // Add the "Authorization: Bearer default" header
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "default");
-                
-                // Build request body (base64-encoded file)
-                var requestBody = new
-                {
-                    DocumentType = docType,
-                    MetadataRule = new
-                    {
-                        // ToDo: Is this where the port is specified on ubuntu?
-                        SemanticCellEndpoint = "http://viewdemo:8000/",
-                        MinChunkContentLength = 1,
-                        MaxChunkContentLength = 512,
-                        ShiftSize = 512
-                    },
-                    Data = Convert.ToBase64String(fileBytes)
-                };
-
-                // Serialize to JSON
-                // Todo: Figure out where to get the serializer from
-                // string reqJson = Newtonsoft.Json.JsonConvert.SerializeObject(requestBody);
-                string reqJson = _Serializer.SerializeJson(requestBody);
-                using var content = new StringContent(reqJson);
-                // By default, StringContent sets Content-Type to "text/plain; charset=utf-8".
-                // Had to override it to be "application/json" (with no explicit charset).
-                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-                
-                // Send the POST request
-                var response = await client.PostAsync(url, content);
-                if (!response.IsSuccessStatusCode) return null;
-
-                // Deserialize the response JSON
-                // ToDo: Figure out where to get the serializer from
-                string json = await response.Content.ReadAsStringAsync();
-                // var result = Newtonsoft.Json.JsonConvert.DeserializeObject<SemanticCellResponse>(json);
-                var result = _Serializer.DeserializeJson<SemanticCellResponse>(json);
-                return result;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-        private static async Task TestConnectivity()
+        private static async Task ValidateConnectivity()
         {
             Console.WriteLine("");
             Console.Write("State: ");
 
             if (await _ViewSemanticCellSdk.ValidateConnectivity())
-                Console.WriteLine("Connected");
+                Console.WriteLine("View Semantic Cell connected");
             else
                 Console.WriteLine("Not connected");
+            
+            if (await _ViewEmbeddingsSdk.ValidateConnectivity())
+                Console.WriteLine("View Embeddings connected");
+            else
+                Console.WriteLine("View Embeddings not connected");
+            
+            if (await _LiteGraphSdk.ValidateConnectivity())
+                Console.WriteLine("LiteGraph connected");
+            else
+                Console.WriteLine("LiteGraph not connected");
 
             Console.WriteLine("");
         }
         
-        private static void EmitLogMessage(View.Sdk.SeverityEnum sev, string msg)
+        
+        private static EmbeddingsGeneratorEnum GetGeneratorType()
         {
-            if (!String.IsNullOrEmpty(msg)) Console.WriteLine(sev.ToString() + " " + msg);
+            return (EmbeddingsGeneratorEnum)(Enum.Parse(
+                typeof(EmbeddingsGeneratorEnum),
+                Inputty.GetString("Generator type [LCProxy/OpenAI/Ollama/VoyageAI]:", "LCProxy", false)));
+
         }
+
+        private static string GetBaseUrl(EmbeddingsGeneratorEnum generator)
+        {
+            string url = "";
+            if (generator == EmbeddingsGeneratorEnum.LCProxy) url = "http://nginx-lcproxy:8000/";
+            else if (generator == EmbeddingsGeneratorEnum.OpenAI) url = "https://api.openai.com/";
+            else if (generator == EmbeddingsGeneratorEnum.VoyageAI) url = "https://api.voyageai.com/";
+            else if (generator == EmbeddingsGeneratorEnum.Ollama) url = "http://localhost:11434/";
+            return Inputty.GetString("URL:", url, false);
+        }
+
+        private static string  GetApiKey()
+        {
+            return Inputty.GetString("API key:", null, true);
+        }
+
+        private static string GetModel(EmbeddingsGeneratorEnum generator)
+        {
+            string model = "";
+            if (generator == EmbeddingsGeneratorEnum.LCProxy) model = "all-MiniLM-L6-v2";
+            else if (generator == EmbeddingsGeneratorEnum.OpenAI) model = "text-embedding-ada-002";
+            else if (generator == EmbeddingsGeneratorEnum.VoyageAI) model = "voyage-3-large";
+            else if (generator == EmbeddingsGeneratorEnum.Ollama) model = "all-minilm";
+            return Inputty.GetString("Model:", model, false);
+        }
+        
+        /// <summary>
+        /// Detects if a string looks like [x, y, z] list notation.
+        /// Returns a list of trimmed strings if so.
+        /// </summary>
+        private static bool IsListNotation(string candidate, out List<string> elements)
+        {
+            elements = new List<string>();
+
+            if (candidate.StartsWith("[") && candidate.EndsWith("]"))
+            {
+                string inner = candidate.Substring(1, candidate.Length - 2);
+                string[] parts = inner.Split(',');
+                foreach (var part in parts)
+                {
+                    string p = part.Trim();
+                    if (!string.IsNullOrEmpty(p)) elements.Add(p);
+                }
+                return true;
+            }
+            return false;
+        }
+        
+        private static void Menu()
+        {
+            Console.WriteLine("");
+            Console.WriteLine("Available commands:");
+            Console.WriteLine("  ?               help, this menu");
+            Console.WriteLine("  q               quit");
+            Console.WriteLine("  cls             clear the screen");
+            Console.WriteLine("  conn            validate connectivity");
+            Console.WriteLine("  ingest          ingest a file");
+            Console.WriteLine("  vsearch         enter prompt for vector search");
+            Console.WriteLine("  search-type     set the vector search type (currently " + _SearchType + ")");
+            Console.WriteLine("");
+        }
+        
+        private static void SetSearchType()
+        {
+            Console.WriteLine("\nSelect one of the following search types:");
+            foreach (var value in Enum.GetNames(typeof(VectorSearchTypeEnum)))
+            {
+                Console.WriteLine("  " + value);
+            }
+        
+            string choice = Inputty.GetString($"Which search type do you want to use? (current: {_SearchType})",
+                _SearchType.ToString(), false);
+        
+            if (Enum.TryParse(choice, true, out VectorSearchTypeEnum parsed))
+            {
+                _SearchType = parsed;
+                Console.WriteLine($"Search type is now set to {_SearchType}.\n");
+            }
+            else
+            {
+                Console.WriteLine("Invalid search type. No changes made.\n");
+            }
+        }
+        
+        /// <summary>
+        /// Executes a vector search with the currently selected search type.
+        /// </summary>
+        private static async Task? VectorSearch()
+        {
+            string searchQuery = Inputty.GetString("Enter a search query:", null, false);
+            
+            EmbeddingsGeneratorEnum generator = GetGeneratorType();
+            string url = GetBaseUrl(generator);
+            string apiKey = GetApiKey();
+            string model = GetModel(generator);
+
+            Console.WriteLine($"\nProcessing search query: \"{searchQuery}\"");
+            
+            var searchEmbeddingRequest = new EmbeddingsRequest
+            {
+                EmbeddingsRule = new EmbeddingsRule
+                {
+                    EmbeddingsGenerator = generator,
+                    EmbeddingsGeneratorUrl = url,
+                    EmbeddingsGeneratorApiKey = apiKey,
+                    BatchSize = _BatchSize,
+                    MaxGeneratorTasks = _MaxParallelTasks,
+                    MaxRetries = _MaxRetries,
+                    MaxFailures = _MaxFailures
+                },
+                Model = model,
+                Contents = new List<string> { searchQuery }
+            };
+
+            var embeddingResult = await _ViewEmbeddingsSdk.GenerateEmbeddings(searchEmbeddingRequest);
+
+            if (!embeddingResult.Success 
+                || embeddingResult.ContentEmbeddings == null
+                || embeddingResult.ContentEmbeddings.Count == 0
+                || embeddingResult.ContentEmbeddings[0].Embeddings == null
+                || embeddingResult.ContentEmbeddings[0].Embeddings.Count == 0)
+            {
+                Console.WriteLine("Failed to generate a non-empty embedding for the search query");
+                return;
+            }
+
+            Console.WriteLine("Generated embeddings for search query");
+
+            var searchRequest = new VectorSearchRequest
+            {
+                TenantGUID = _Tenant,
+                GraphGUID = _Graph,
+                // ToDo: Should this be Node or Graph?
+                Domain = VectorSearchDomainEnum.Node,
+                SearchType = _SearchType,
+                Embeddings = embeddingResult.ContentEmbeddings[0].Embeddings
+            };
+
+            var results = await _LiteGraphSdk.SearchVectors(_Tenant, _Graph, searchRequest);
+            if (results == null || !results.Any())
+            {
+                Console.WriteLine("No matches found");
+                return;
+            }
+            
+            Console.WriteLine($"Found {results.Count} matches.");
+
+            IEnumerable<VectorSearchResult> sortedResults = _SearchType switch
+            {
+                VectorSearchTypeEnum.CosineSimilarity => results.OrderByDescending(r => r.Score),
+                VectorSearchTypeEnum.DotProduct => results.OrderByDescending(r => r.Score),
+                VectorSearchTypeEnum.EuclidianDistance => results.OrderBy(r => r.Score),
+                VectorSearchTypeEnum.EuclidianSimilarity => results.OrderByDescending(r => r.Score),
+                _ => results
+            };
+            
+            var table = new ConsoleTable("Node GUID", $"{_SearchType} Search Score" , "Contents");
+
+            foreach (var result in sortedResults)
+            {
+                string rawContent = result.Node.Tags["Content"] ?? "[No Content]";
+                
+                string content;
+                if (IsListNotation(rawContent, out var elements))
+                {
+                    var joined = string.Join(" ", elements);
+                    content = joined.Length <= 40 ? joined : joined.Substring(0, 40);
+                }
+                else
+                {
+                    content = rawContent.Length <= 40 ? rawContent : rawContent.Substring(0, 40);
+                }
+
+                table.AddRow(result.Node.GUID, 
+                    result.Score.HasValue ? result.Score.Value.ToString("F3") : "N/A", 
+                    content);
+            }
+
+            Console.WriteLine(table);
+        }
+
+        #endregion
+                
     }
-
-    // JSON response shape from typedetection
-    // public class TypeDetectionResult
-    // {
-    //     public string MimeType { get; set; }
-    //     public string Extension { get; set; }
-    //     public string Type { get; set; }
-    // }
-
-    // JSON response shape from semanticcell
-    // public class SemanticCellResponse
-    // {
-    //     public bool Success { get; set; }
-    //     public object Timestamp { get; set; }
-    //     public List<SemanticCell> SemanticCells { get; set; }
-    // }
-    //
-    // public class SemanticCell
-    // {
-    //     public string GUID { get; set; }
-    //     public string CellType { get; set; }
-    //     public string MD5Hash { get; set; }
-    //     public string SHA1Hash { get; set; }
-    //     public string SHA256Hash { get; set; }
-    //     public int Position { get; set; }
-    //     public int Length { get; set; }
-    //     public List<Chunk> Chunks { get; set; }
-    //     public List<SemanticCell> Children { get; set; }
-    // }
-    //
-    // public class Chunk
-    // {
-    //     public string GUID { get; set; }
-    //     public string MD5Hash { get; set; }
-    //     public string SHA1Hash { get; set; }
-    //     public string SHA256Hash { get; set; }
-    //     public int Position { get; set; }
-    //     public int Start { get; set; }
-    //     public int End { get; set; }
-    //     public int Length { get; set; }
-    //     public string Content { get; set; }
-    //     
-    //     public List<float> Embeddings { get; set; }
-    // }
 }
